@@ -44,6 +44,8 @@ export function blankTemplate(name = 'New template'): Template {
   }
 }
 
+export const EXAMPLE_NOTE = 'Example template. Edit, duplicate or delete it.'
+
 export function exampleTemplates(): Template[] {
   const now = Date.now()
   return [
@@ -62,7 +64,7 @@ export function exampleTemplates(): Template[] {
       ],
       stats: { str: 100, dex: 25, int: 100 },
       masteryOrbs: 0,
-      notes: 'Example template. Edit, duplicate or delete it.',
+      notes: EXAMPLE_NOTE,
       updatedAt: now,
     },
     {
@@ -80,7 +82,7 @@ export function exampleTemplates(): Template[] {
       ],
       stats: { str: 100, dex: 100, int: 25 },
       masteryOrbs: 0,
-      notes: 'Example template. Edit, duplicate or delete it.',
+      notes: EXAMPLE_NOTE,
       updatedAt: now - 1,
     },
   ]

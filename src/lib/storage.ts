@@ -1,6 +1,39 @@
-import { exampleTemplates, sanitize, type Template } from './template'
+import { EXAMPLE_NOTE, exampleTemplates, sanitize, type Template } from './template'
 
 const KEY = 'obc.templates.v1'
+
+/** Templates the person made in this browser (not the starter examples). */
+export function loadOwnLocalTemplates(): Template[] {
+  try {
+    const raw = localStorage.getItem(KEY)
+    if (raw === null) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map(sanitize)
+      .filter((t): t is Template => t !== null && t.notes !== EXAMPLE_NOTE)
+  } catch {
+    return []
+  }
+}
+
+const dismissKey = (userId: string) => `obc.localDismissed.${userId}`
+
+export function isLocalDismissed(userId: string): boolean {
+  try {
+    return localStorage.getItem(dismissKey(userId)) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function setLocalDismissed(userId: string): void {
+  try {
+    localStorage.setItem(dismissKey(userId), '1')
+  } catch {
+    /* ignore */
+  }
+}
 
 /** Templates live in this browser's localStorage. Nothing is sent anywhere. */
 export function loadTemplates(): Template[] {

@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, type ReactNode } from 'react'
 import { FOCUS_LABEL, skillCap, skillTotal, type Template } from '../lib/template'
 
 interface Props {
@@ -7,9 +7,10 @@ interface Props {
   onSelect: (id: string) => void
   onNew: () => void
   onImport: (file: File) => void
+  footer?: ReactNode
 }
 
-export function TemplateList({ templates, selectedId, onSelect, onNew, onImport }: Props) {
+export function TemplateList({ templates, selectedId, onSelect, onNew, onImport, footer }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
 
   return (
@@ -65,6 +66,7 @@ export function TemplateList({ templates, selectedId, onSelect, onNew, onImport 
           })}
         </ul>
       )}
+      {footer}
     </nav>
   )
 }

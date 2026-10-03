@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { AccountMenu } from './components/AccountMenu'
 import { Editor } from './components/Editor'
+import { SignInDialog } from './components/SignInDialog'
 import { StatsView } from './components/StatsView'
 import { TemplateList } from './components/TemplateList'
+import { useAuth } from './hooks/useAuth'
+import { useTemplates, type SaveState } from './hooks/useTemplates'
 import { useTheme, type ThemeChoice } from './hooks/useTheme'
-import { downloadJson, loadTemplates, saveTemplates, slug } from './lib/storage'
+import { downloadJson, slug } from './lib/storage'
+import { supabase } from './lib/supabase'
 import { blankTemplate, decodeShare, newId, sanitize, shareUrl, type Template } from './lib/template'
 
 type View = 'builder' | 'stats'
@@ -17,16 +22,26 @@ function clearHash() {
   history.replaceState(null, '', window.location.pathname + window.location.search)
 }
 
+const SAVE_LABEL: Record<SaveState, string> = {
+  idle: 'Saved to your account',
+  saved: 'Saved to your account',
+  saving: 'Saving…',
+  error: 'Couldn’t save.',
+}
+
 export default function App() {
-  const [templates, setTemplates] = useState<Template[]>(loadTemplates)
-  const [selectedId, setSelectedId] = useState<string | null>(() => templates[0]?.id ?? null)
+  const auth = useAuth()
+  const userId = auth.ready ? (auth.session?.user.id ?? null) : null
+  const store = useTemplates(userId)
+  const { templates } = store
+
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [shared, setShared] = useState<Template | null>(readShareFromHash)
   const [view, setView] = useState<View>('builder')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [signInOpen, setSignInOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [theme, setTheme] = useTheme()
-
-  useEffect(() => saveTemplates(templates), [templates])
 
   useEffect(() => {
     const onHash = () => setShared(readShareFromHash())
@@ -40,15 +55,12 @@ export default function App() {
     return () => clearTimeout(id)
   }, [toast])
 
-  const selected = templates.find((t) => t.id === selectedId) ?? null
-
-  const update = useCallback((t: Template) => {
-    const next = { ...t, updatedAt: Date.now() }
-    setTemplates((list) => list.map((x) => (x.id === t.id ? next : x)))
-  }, [])
+  // Falls back to the first template while the list loads or after a delete.
+  const selected = templates.find((t) => t.id === selectedId) ?? templates[0] ?? null
+  const signedIn = store.mode === 'cloud'
 
   const addTemplate = (t: Template) => {
-    setTemplates((list) => [t, ...list])
+    store.add([t])
     setSelectedId(t.id)
     setView('builder')
     setDrawerOpen(false)
@@ -64,12 +76,10 @@ export default function App() {
     }
   }
 
-  const handleDelete = (t: Template) => {
+  const handleDelete = async (t: Template) => {
     if (!window.confirm(`Delete "${t.name}"? This can't be undone.`)) return
-    const rest = templates.filter((x) => x.id !== t.id)
-    setTemplates(rest)
-    setSelectedId(rest[0]?.id ?? null)
-    setToast('Template deleted')
+    const ok = await store.remove(t.id)
+    setToast(ok ? 'Template deleted' : 'Couldn’t delete the template. Check your connection and try again.')
   }
 
   const handleImport = async (file: File) => {
@@ -80,7 +90,7 @@ export default function App() {
         .filter((t): t is Template => t !== null)
         .map((t) => ({ ...t, id: newId() }))
       if (items.length === 0) throw new Error('empty')
-      setTemplates((list) => [...items, ...list])
+      store.add(items)
       setSelectedId(items[0].id)
       setDrawerOpen(false)
       setToast(`Imported ${items.length} template${items.length === 1 ? '' : 's'}`)
@@ -94,13 +104,27 @@ export default function App() {
     addTemplate({ ...shared, id: newId(), updatedAt: Date.now() })
     setShared(null)
     clearHash()
-    setToast('Saved to your templates')
+    setToast(signedIn ? 'Saved to your account' : 'Saved to your templates')
+  }
+
+  const signOut = async () => {
+    await store.flush()
+    await supabase?.auth.signOut()
+    setToast('Signed out')
+  }
+
+  const moveLocal = async () => {
+    const n = store.localToMove.length
+    const ok = await store.moveLocal()
+    setToast(
+      ok ? `Added ${n} template${n === 1 ? '' : 's'} to your account` : 'Couldn’t add them. Check your connection and try again.',
+    )
   }
 
   const list = (
     <TemplateList
       templates={templates}
-      selectedId={shared ? null : selectedId}
+      selectedId={shared ? null : (selected?.id ?? null)}
       onSelect={(id) => {
         setSelectedId(id)
         setView('builder')
@@ -112,8 +136,21 @@ export default function App() {
       }}
       onNew={() => addTemplate(blankTemplate())}
       onImport={handleImport}
+      footer={
+        supabase && !signedIn && auth.ready ? (
+          <p className="hint rail-note">
+            Saved in this browser only.{' '}
+            <button type="button" className="linkish" onClick={() => setSignInOpen(true)}>
+              Sign in
+            </button>{' '}
+            to keep them on every device.
+          </p>
+        ) : null
+      }
     />
   )
+
+  const loading = !auth.ready || store.status === 'loading'
 
   return (
     <div className="app">
@@ -137,14 +174,24 @@ export default function App() {
           </button>
         </nav>
 
-        <label className="theme-pick">
-          <span className="sr-only">Color theme</span>
-          <select value={theme} onChange={(e) => setTheme(e.target.value as ThemeChoice)}>
-            <option value="system">System theme</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
+        <div className="topbar-end">
+          <label className="theme-pick">
+            <span className="sr-only">Color theme</span>
+            <select value={theme} onChange={(e) => setTheme(e.target.value as ThemeChoice)}>
+              <option value="system">Auto theme</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          {supabase && auth.ready &&
+            (auth.session ? (
+              <AccountMenu session={auth.session} onSignOut={signOut} />
+            ) : (
+              <button type="button" className="primary signin-btn" onClick={() => setSignInOpen(true)}>
+                Sign in
+              </button>
+            ))}
+        </div>
       </header>
 
       {view === 'builder' ? (
@@ -162,7 +209,36 @@ export default function App() {
             </button>
             {drawerOpen && <div className="drawer">{list}</div>}
 
-            {shared ? (
+            {signedIn && store.localToMove.length > 0 && !shared && (
+              <div className="banner">
+                <p>
+                  This browser has {store.localToMove.length} template{store.localToMove.length === 1 ? '' : 's'} you
+                  made before signing in.
+                </p>
+                <div className="banner-actions">
+                  <button type="button" className="primary" onClick={moveLocal}>
+                    Add to my account
+                  </button>
+                  <button type="button" onClick={store.dismissLocal}>
+                    Not now
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {store.status === 'error' ? (
+              <div className="blank">
+                <h1>Couldn’t load your templates</h1>
+                <p>Check your connection, then try again.</p>
+                <button type="button" className="primary" onClick={store.retry}>
+                  Try again
+                </button>
+              </div>
+            ) : loading ? (
+              <div className="blank" aria-busy="true">
+                <p>Loading your templates…</p>
+              </div>
+            ) : shared ? (
               <>
                 <div className="banner">
                   <p>You're viewing a shared template. Changes stay here until you save it.</p>
@@ -194,11 +270,26 @@ export default function App() {
             ) : selected ? (
               <Editor
                 template={selected}
-                onChange={update}
+                onChange={store.update}
                 onShare={() => handleShare(selected)}
                 onExport={() => downloadJson(`${slug(selected.name)}.json`, selected)}
-                onDuplicate={() => addTemplate({ ...selected, id: newId(), name: `${selected.name} (copy)` })}
+                onDuplicate={() => addTemplate({ ...selected, id: newId(), name: `${selected.name} (copy)`, updatedAt: Date.now() })}
                 onDelete={() => handleDelete(selected)}
+                status={
+                  signedIn ? (
+                    <p className={`save-state ${store.saveState}`} role="status">
+                      {SAVE_LABEL[store.saveState]}
+                      {store.saveState === 'error' && (
+                        <>
+                          {' '}
+                          <button type="button" className="linkish" onClick={store.retry}>
+                            Try again
+                          </button>
+                        </>
+                      )}
+                    </p>
+                  ) : null
+                }
               />
             ) : (
               <div className="blank">
@@ -218,8 +309,11 @@ export default function App() {
       )}
 
       <footer className="site-foot">
-        Fan-made tool, not affiliated with UO Outlands. Templates are saved in this browser only.
+        Fan-made tool, not affiliated with UO Outlands.{' '}
+        {signedIn ? 'Templates are saved to your account.' : 'Templates are saved in this browser only.'}
       </footer>
+
+      <SignInDialog open={signInOpen && !auth.session} onClose={() => setSignInOpen(false)} />
 
       <div className="toast" role="status" aria-live="polite">
         {toast && <span>{toast}</span>}

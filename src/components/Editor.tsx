@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { RULES } from '../data/outlands'
 import { FOCUS_LABEL, problems, type Focus, type Template } from '../lib/template'
 import { BudgetBar } from './BudgetBar'
@@ -12,9 +13,11 @@ interface Props {
   onDuplicate: () => void
   onDelete: () => void
   readOnly?: boolean
+  /** Shown beside the action buttons, e.g. the cloud save state. */
+  status?: ReactNode
 }
 
-export function Editor({ template, onChange, onShare, onExport, onDuplicate, onDelete, readOnly }: Props) {
+export function Editor({ template, onChange, onShare, onExport, onDuplicate, onDelete, readOnly, status }: Props) {
   const issues = problems(template)
 
   return (
@@ -107,6 +110,7 @@ export function Editor({ template, onChange, onShare, onExport, onDuplicate, onD
           <button type="button" onClick={onDuplicate}>
             Duplicate
           </button>
+          {status}
           <button type="button" className="danger" onClick={onDelete}>
             Delete
           </button>
